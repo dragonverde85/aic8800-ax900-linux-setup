@@ -1,0 +1,151 @@
+Markdown
+
+# AIC8800 (AX900) Driver Installation & Configuration on Linux Mint
+
+A step-by-step guide to installing, activating, and automating the **AIC8800 / AX900** Wi-Fi 6 + Bluetooth combo USB adapter (Hardware IDs `1111:1111` and `368b:8d81`).
+
+---
+
+## 📋 Table of Contents
+- [Prerequisites & Installing Dependencies](#1-prerequisites--installing-dependencies)
+- [Base Driver Installation (Wi-Fi)](#2-base-driver-installation-wi-fi)
+- [USB Mode Switching & Verification](#3-usb-mode-switching--verification)
+- [Bluetooth Activation (hci0)](#4-bluetooth-activation-hci0)
+- [System Startup Automation](#5-system-startup-automation)
+- [Troubleshooting](#6-troubleshooting)
+
+---
+
+## 1. Prerequisites & Installing Dependencies
+
+Before starting, install the required packages to build kernel modules and manage wireless interfaces:
+
+```
+sudo apt update
+sudo apt install -y dkms build-essential git usb-modeswitch rfkill bluez bluetooth
+
+2. Base Driver Installation (Wi-Fi)
+
+    Important: You must use the main branch. Do not use the legacy-mcu1 branch, as it disables the Wi-Fi interface for this chipset revision.
+
+    Clone the official repository (or enter the directory if already cloned):
+
+
+
+cd ~
+[ -d "aic8800d80" ] && cd aic8800d80 || git clone [https://github.com/shenmintao/aic8800d80.git](https://github.com/shenmintao/aic8800d80.git) && cd aic8800d80
+
+    Make sure you are on the main branch and launch the installer:
+
+
+
+git checkout main
+sudo ./install.sh
+
+    Reboot your system to register the module in DKMS and apply initial udev rules:
+
+
+
+sudo reboot
+
+3. USB Mode Switching & Verification
+
+By default, the adapter boots in USB Mass Storage mode (1111:1111). If Wi-Fi does not activate automatically upon boot, force the mode switch and unblock the radio interfaces:
+
+
+sudo usb_modeswitch -c /etc/usb_modeswitch.d/1111:1111
+sudo rfkill unblock all
+
+To verify if the network interface is detected:
+
+
+ip link
+
+4. Bluetooth Activation (hci0)
+
+To enable the Bluetooth interface over the native btusb driver, you must load the firmware injector and the USB compatibility quirk:
+
+    Load the required kernel modules:
+
+
+
+sudo modprobe aic_load_fw
+sudo modprobe aic_zlp_quirk
+
+    Restart the Bluetooth service and bring up the interface:
+
+
+
+sudo systemctl restart bluetooth
+sudo hciconfig hci0 up
+
+    Check the controller status:
+
+
+
+hciconfig -a
+
+(The BD Address should display a valid, non-zero MAC address, and the status should read UP RUNNING).
+5. System Startup Automation
+
+To avoid entering commands manually on every reboot, set up automatic module loading:
+
+    Add the Bluetooth modules to the kernel's startup module list:
+
+
+
+echo "aic_load_fw" | sudo tee -a /etc/modules
+echo "aic_zlp_quirk" | sudo tee -a /etc/modules
+
+    (Optional) If you experience random disconnections, disable USB autosuspend by editing GRUB:
+
+
+
+sudo nano /etc/default/grub
+
+Add usbcore.autosuspend=-1 inside the quotes for GRUB_CMDLINE_LINUX_DEFAULT, save the file, and update GRUB:
+
+
+sudo update-grub
+
+6. Troubleshooting
+❌ Unknown symbol in module error when loading aic8800_fdrv
+
+Occurs when leftover artifacts from previous manual builds remain in the system.
+
+Fix: Clean the DKMS registry, remove stale module directories, and reinstall from main:
+
+
+sudo dkms remove aic8800/1.0.0 --all
+sudo rm -rf /lib/modules/$(uname -r)/kernel/drivers/net/wireless/aic8800
+sudo depmod -a
+cd ~/aic8800d80
+git checkout main
+sudo ./install.sh
+sudo reboot
+
+❌ Can't get device info: No such device or Wi-Fi missing
+
+Caused by compiling with the incompatible legacy-mcu1 branch.
+
+Fix: Switch back to the stable main branch:
+
+
+cd ~/aic8800d80
+git checkout main
+sudo ./install.sh
+sudo reboot
+
+❌ Connection timed out (110) on Bluetooth
+
+Indicates an initialization timing conflict with Linux's generic Bluetooth driver.
+
+Fix: Reset the module loading sequence:
+
+
+sudo modprobe -r btusb
+sudo modprobe aic_load_fw
+sudo modprobe aic_zlp_quirk
+sudo modprobe btusb
+sudo systemctl restart bluetooth
+sudo hciconfig hci0 up
